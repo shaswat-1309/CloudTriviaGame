@@ -1,0 +1,46 @@
+{
+  "Comment": "Wrapping up and cleaning the database after the game is over",
+  "StartAt": "updateGameStatusToCompleted",
+  "States": {
+    "updateGameStatusToCompleted": {
+      "Type": "Task",
+      "Parameters": {
+        "input.$": "$",
+        "game_status": "Completed"
+      },
+      "Resource": "arn:aws:lambda:us-east-1:182296130665:function:update_game_status",
+      "Next": "displayScoreBoard"
+    },
+    "displayScoreBoard": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:182296130665:function:display_score_board",
+      "Next": "updateTeamAndUserScore"
+    },
+    "updateTeamAndUserScore": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:182296130665:function:update_team_and_user_score",
+      "Next": "updateTeamStats"
+    },
+    "updateTeamStats": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:182296130665:function:updateTeamStats",
+      "Next": "updateGameAndAdminInsightsLookerStudio"
+    },
+    "updateGameAndAdminInsightsLookerStudio": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:182296130665:function:update_game_insights",
+      "Next": "Wait"
+    },
+    "Wait": {
+      "Comment": "Wait for people to view the scoreboard before disconnecting the connection.",
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "disconnectParticipants"
+    },
+    "disconnectParticipants": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:182296130665:function:disconnect_participants",
+      "End": true
+    }
+  }
+}

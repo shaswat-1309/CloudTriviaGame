@@ -1,0 +1,97 @@
+{
+   "headers":{
+      "Accept-Encoding":"gzip, deflate, br",
+      "Accept-Language":"en-US,en;q=0.9",
+      "Cache-Control":"no-cache",
+      "Host":"rsbr5uuqzg.execute-api.us-east-1.amazonaws.com",
+      "Origin":"http://localhost:3000",
+      "Pragma":"no-cache",
+      "Sec-WebSocket-Extensions":"permessage-deflate; client_max_window_bits",
+      "Sec-WebSocket-Key":"hFLJ/384ReV1q5tZUiX6FQ==",
+      "Sec-WebSocket-Version":"13",
+      "User-Agent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+      "X-Amzn-Trace-Id":"Root=1-64ba03f3-2dabb9757cb8baa70183e6f9",
+      "X-Forwarded-For":"156.57.133.252",
+      "X-Forwarded-Port":"443",
+      "X-Forwarded-Proto":"https"
+   },
+   "multiValueHeaders":{
+      "Accept-Encoding":[
+         "gzip, deflate, br"
+      ],
+      "Accept-Language":[
+         "en-US,en;q=0.9"
+      ],
+      "Cache-Control":[
+         "no-cache"
+      ],
+      "Host":[
+         "rsbr5uuqzg.execute-api.us-east-1.amazonaws.com"
+      ],
+      "Origin":[
+         "http://localhost:3000"
+      ],
+      "Pragma":[
+         "no-cache"
+      ],
+      "Sec-WebSocket-Extensions":[
+         "permessage-deflate; client_max_window_bits"
+      ],
+      "Sec-WebSocket-Key":[
+         "hFLJ/384ReV1q5tZUiX6FQ=="
+      ],
+      "Sec-WebSocket-Version":[
+         "13"
+      ],
+      "User-Agent":[
+         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+      ],
+      "X-Amzn-Trace-Id":[
+         "Root=1-64ba03f3-2dabb9757cb8baa70183e6f9"
+      ],
+      "X-Forwarded-For":[
+         "156.57.133.252"
+      ],
+      "X-Forwarded-Port":[
+         "443"
+      ],
+      "X-Forwarded-Proto":[
+         "https"
+      ]
+   },
+   "queryStringParameters":{
+      "gameId":"game1",
+      "teamName":"team1",
+      "userId":"user1"
+   },
+   "multiValueQueryStringParameters":{
+      "gameId":[
+         "game1"
+      ],
+      "teamName":[
+         "team1"
+      ],
+      "userId":[
+         "user1"
+      ]
+   },
+   "requestContext":{
+      "routeKey":"$connect",
+      "eventType":"CONNECT",
+      "extendedRequestId":"IZWODEi1IAMFWVQ=",
+      "requestTime":"21/Jul/2023:04:05:07 +0000",
+      "messageDirection":"IN",
+      "stage":"production",
+      "connectedAt":1689912307222,
+      "requestTimeEpoch":1689912307250,
+      "identity":{
+         "userAgent":"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
+         "sourceIp":"156.57.133.252"
+      },
+      "requestId":"IZWODEi1IAMFWVQ=",
+      "domainName":"rsbr5uuqzg.execute-api.us-east-1.amazonaws.com",
+      "connectionId":"IZWODdZrIAMCFsQ=",
+      "apiId":"rsbr5uuqzg"
+   },
+   "isBase64Encoded":false
+}

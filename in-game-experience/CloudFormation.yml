@@ -1,0 +1,3376 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+
+Parameters:
+  ExistingLabRole:
+    Type: String
+    Default: arn:aws:iam::182296130665:role/LabRole
+  InGameExperienceWebSocketAPIStageName:
+    Type: String
+    Default: production
+  FetchGameQuestionsCloudFunctionURL:
+    Type: String
+    Default: https://us-east1-serverlessproject-392714.cloudfunctions.net/fetchgamequestions
+  UpdateGameInsightsCloudFunctionURL:
+    Type: String
+    Default: https://us-central1-b00934679-lab.cloudfunctions.net/upload_latest_game_scoreboard
+
+
+Outputs:
+  InGameExperienceWebSocketAPIPublishUrl:
+    Value: !Sub https://${InGameExperienceWebSocketAPI}.execute-api.${AWS::Region}.amazonaws.com/${InGameExperienceWebSocketAPIStageName}
+  InGameExperienceWebSocketAPIWSUrl:
+    Value: !Sub wss://${InGameExperienceWebSocketAPI}.execute-api.${AWS::Region}.amazonaws.com/${InGameExperienceWebSocketAPIStageName}
+  TriviaApiEndpoint:
+    Value: !Sub "https://${TriviaGameAPI}.execute-api.${AWS::Region}.amazonaws.com/prod/"
+    Description: URL of the API endpoint
+
+Resources:
+  GameParticipantsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: GameParticipants
+      AttributeDefinitions:
+        - AttributeName: game_id
+          AttributeType: S
+        - AttributeName: connection_id
+          AttributeType: S
+        - AttributeName: team
+          AttributeType: S
+      KeySchema:
+        - AttributeName: game_id
+          KeyType: HASH
+        - AttributeName: connection_id
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+      GlobalSecondaryIndexes:
+        - IndexName: GameIdTeamIndex
+          KeySchema:
+            - AttributeName: game_id
+              KeyType: HASH
+            - AttributeName: team
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  ScoreboardTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Scoreboard
+      AttributeDefinitions:
+        - AttributeName: game_id
+          AttributeType: S
+        - AttributeName: team
+          AttributeType: S
+        - AttributeName: score
+          AttributeType: N
+      KeySchema:
+        - AttributeName: game_id
+          KeyType: HASH
+        - AttributeName: team
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+      GlobalSecondaryIndexes:
+        - IndexName: GameScoreIndex
+          KeySchema:
+            - AttributeName: game_id
+              KeyType: HASH
+            - AttributeName: score
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  GameQuestionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: GameQuestions
+      AttributeDefinitions:
+        - AttributeName: game_id
+          AttributeType: S
+        - AttributeName: question_number
+          AttributeType: N
+      KeySchema:
+        - AttributeName: game_id
+          KeyType: HASH
+        - AttributeName: question_number
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+
+  CreateGameTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: quiz_game_table
+      AttributeDefinitions:
+        - AttributeName: game_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: game_id
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  TeamsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Team
+      AttributeDefinitions:
+        - AttributeName: teamName
+          AttributeType: S
+      KeySchema:
+        - AttributeName: teamName
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  InvitationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: Invitations
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  InGameExperienceWebSocketAPI:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: InGameExperienceWebSocketAPI
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: "$request.body.action"
+
+  ConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref InGameExperienceWebSocketAPI
+      RouteKey: $connect
+      AuthorizationType: NONE
+      OperationName: ConnectRoute
+      RouteResponseSelectionExpression: $default
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref JoinGameIntegration
+
+  JoinGameIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref InGameExperienceWebSocketAPI
+      Description: Connect Integration
+      IntegrationType: AWS_PROXY
+      IntegrationUri:
+        Fn::Sub:
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${JoinGameFunction.Arn}/invocations
+
+  JoinGameFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: join_game.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: ws/join_game.zip
+      Description: Websocket connect/join game function to store the connection details.
+      FunctionName: join_game
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+
+ # permission for API Gateway to invoke the lambda function
+  JoinGameFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref JoinGameFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${InGameExperienceWebSocketAPI}/*/$connect
+
+  SubmitAnswerRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref InGameExperienceWebSocketAPI
+      RouteKey: submitAnswer
+      AuthorizationType: NONE
+      OperationName: SubmitAnswerRoute
+      RouteResponseSelectionExpression: $default
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref SubmitAnswerIntegration
+
+  SubmitAnswerIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref InGameExperienceWebSocketAPI
+      Description: Submit answer
+      IntegrationType: AWS_PROXY
+      IntegrationUri:
+        Fn::Sub:
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SubmitAnswerFunction.Arn}/invocations
+
+  SubmitAnswerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: submit_answer.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: ws/submit_answer.zip
+      Description: Submit answer through websocket connection.
+      FunctionName: submit_answer
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+          ENDPOINT_URL:
+            !Sub https://${InGameExperienceWebSocketAPI}.execute-api.${AWS::Region}.amazonaws.com/${InGameExperienceWebSocketAPIStageName}
+
+ # permission for API Gateway to invoke the lambda function
+  SubmitAnswerFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SubmitAnswerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${InGameExperienceWebSocketAPI}/*/submitAnswer
+
+  GetHintRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref InGameExperienceWebSocketAPI
+      RouteKey: getHint
+      AuthorizationType: NONE
+      OperationName: GetHintRoute
+      RouteResponseSelectionExpression: $default
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref GetHintIntegration
+
+  GetHintIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref InGameExperienceWebSocketAPI
+      Description: Get hint and show everyone in team
+      IntegrationType: AWS_PROXY
+      IntegrationUri:
+        Fn::Sub:
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetHintFunction.Arn}/invocations
+
+  GetHintFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: get_hint.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: ws/get_hint.zip
+      Description: Get hint and share to everyone in team using websocket connection.
+      FunctionName: get_hint
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+          ENDPOINT_URL:
+            !Sub https://${InGameExperienceWebSocketAPI}.execute-api.${AWS::Region}.amazonaws.com/${InGameExperienceWebSocketAPIStageName}
+
+ # permission for API Gateway to invoke the lambda function
+  GetHintFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref GetHintFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${InGameExperienceWebSocketAPI}/*/getHint
+
+  SendMessageRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref InGameExperienceWebSocketAPI
+      RouteKey: sendMessage
+      AuthorizationType: NONE
+      OperationName: SendMessageRoute
+      RouteResponseSelectionExpression: $default
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref SendMessageIntegration
+
+  SendMessageIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref InGameExperienceWebSocketAPI
+      Description: Send message to everyone in team.
+      IntegrationType: AWS_PROXY
+      IntegrationUri:
+        Fn::Sub:
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SendMessageFunction.Arn}/invocations
+
+  SendMessageFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: send_message.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: ws/send_message.zip
+      Description: Send message in group chat.
+      FunctionName: send_message
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+          ENDPOINT_URL:
+            !Sub https://${InGameExperienceWebSocketAPI}.execute-api.${AWS::Region}.amazonaws.com/${InGameExperienceWebSocketAPIStageName}
+
+ # permission for API Gateway to invoke the lambda function
+  SendMessageFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SendMessageFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${InGameExperienceWebSocketAPI}/*/sendMessage
+
+  DisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref InGameExperienceWebSocketAPI
+      RouteKey: $disconnect
+      AuthorizationType: NONE
+      OperationName: DisconnectRoute
+      RouteResponseSelectionExpression: $default
+      Target: !Join
+        - '/'
+        - - 'integrations'
+          - !Ref ExitGameIntegration
+
+  ExitGameIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref InGameExperienceWebSocketAPI
+      Description: Disconnect Integration
+      IntegrationType: AWS_PROXY
+      IntegrationUri:
+        Fn::Sub:
+          arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ExitGameFunction.Arn}/invocations
+
+  ExitGameFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: exit_game.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: ws/exit_game.zip
+      Description: Websocket disconnect/exit game function to remove the connection details.
+      FunctionName: exit_game
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+
+ # permission for API Gateway to invoke the lambda function
+  ExitGameFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ExitGameFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${InGameExperienceWebSocketAPI}/*/$disconnect
+
+  InGameExperienceWebSocketAPIDeployment:
+    Type: AWS::ApiGatewayV2::Deployment
+    DependsOn:
+      - ConnectRoute
+      - DisconnectRoute
+      - SubmitAnswerRoute
+      - SendMessageRoute
+      - GetHintRoute
+    Properties:
+      ApiId: !Ref InGameExperienceWebSocketAPI
+
+  InGameExperienceWebSocketAPIProductionStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref InGameExperienceWebSocketAPI
+      DeploymentId: !Ref InGameExperienceWebSocketAPIDeployment
+      StageName: !Ref InGameExperienceWebSocketAPIStageName
+
+  CreateGameEventRuleFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: create_game_event_rule.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: create_game/create_game_event_rule.zip
+      Description: Create event rule for triggering the setup_game lambda function 10 min before the game start time.
+      FunctionName: create_game_event_rule
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+
+#  CreateGameMockFunction:
+#    Type: AWS::Lambda::Function
+#    Properties:
+#      Runtime: python3.9
+#      Role: !Ref ExistingLabRole
+#      Handler: create_game.lambda_handler
+#      Code:
+#        S3Bucket: sdp-b00934679
+#        S3Key: create_game/create_game.zip
+#      Description: This is mock lambda function and has to be replaced while integrating!!!
+#      FunctionName: create_game
+#      Environment:
+#        Variables:
+#          REGION:
+#            !Ref "AWS::Region"
+
+  SetupGameFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: setup_game.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: setup_game/setup_game.zip
+      Description: This lambda is triggered 10 minutes before the game starts. It in turn invoke step function SetupGame to prepare the event driven environment and DB ready.
+      FunctionName: setup_game
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+          SETUP_GAME_STEP_FN_ARN:
+            !GetAtt SetupGameStateMachine.Arn
+
+  SetupGameStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    DependsOn:
+      - UpdateGameStatusFunction
+      - UpdateEventRuleFunction
+      - GetGameQuestionsFunction
+      - SaveGameQuestionsFunction
+    Properties:
+      StateMachineName: SetupGame
+      DefinitionS3Location:
+        Bucket: sdp-b00934679
+        Key: setup_game/SetupGame.json
+      RoleArn: !Ref ExistingLabRole
+
+  UpdateGameStatusFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: update_game_status.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: setup_game/update_game_status.zip
+      Description: This lambda updates the game status to the status passed to it (Waiting).
+      FunctionName: update_game_status
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+
+  UpdateEventRuleFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: update_event_rule.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: setup_game/update_event_rule.zip
+      Description: This lambda updates the game rule so that it triggers fetch question lambda every 1 min.
+      FunctionName: update_event_rule
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+
+  GetGameQuestionsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Architectures:
+        - arm64
+      Role: !Ref ExistingLabRole
+      Handler: get_game_questions.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: setup_game/get_game_questions.zip
+      Layers:
+        - !Ref RequestsLayer
+      Description: This lambda calls admin module's fetch game question related cloud function API.
+      FunctionName: get_game_questions
+      Timeout: 60
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+          FETCH_QUESTION_URL:
+            !Ref FetchGameQuestionsCloudFunctionURL
+
+  SaveGameQuestionsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: save_game_questions.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: setup_game/save_game_questions.zip
+      Description: Save the game questions to GameQuestions table.
+      FunctionName: save_game_questions
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+
+  FetchQuestionFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: fetch_question.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: fetch_question/fetch_question.zip
+      Description: This lambda is triggered every 1 min once the game starts. It in turn invoke step function.
+      FunctionName: fetch_question
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+          FETCH_QN_STEP_FN_ARN:
+            !GetAtt FetchQuestionStateMachine.Arn
+
+  FetchQuestionStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    DependsOn:
+      - ShowCurrentAnswerFunction
+      - ShowNextQuestionFunction
+      - UpdateEventRuleTargetInputFunction
+      - DisableEventRuleFunction
+      - GameOverStateMachine
+    Properties:
+      StateMachineName: FetchQuestion
+      DefinitionS3Location:
+        Bucket: sdp-b00934679
+        Key: fetch_question/FetchQuestion.json
+      RoleArn: !Ref ExistingLabRole
+
+  ShowCurrentAnswerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: show_current_answer.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: fetch_question/show_current_answer.zip
+      Description: This function shows the correct answer to the previous question and current team scores.
+      FunctionName: show_current_answer
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+          ENDPOINT_URL:
+            !Sub https://${InGameExperienceWebSocketAPI}.execute-api.${AWS::Region}.amazonaws.com/${InGameExperienceWebSocketAPIStageName}
+
+  ShowNextQuestionFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: show_next_question.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: fetch_question/show_next_question.zip
+      Description: This function shows the next question in the game.
+      FunctionName: show_next_question
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+          ENDPOINT_URL:
+            !Sub https://${InGameExperienceWebSocketAPI}.execute-api.${AWS::Region}.amazonaws.com/${InGameExperienceWebSocketAPIStageName}
+
+  UpdateEventRuleTargetInputFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: update_event_rule_target_input.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: fetch_question/update_event_rule_target_input.zip
+      Description: This function updates the event rule target input to update the question number after each question is displayed.
+      FunctionName: update_event_rule_target_input
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+
+  DisableEventRuleFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: disable_event_rule.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: fetch_question/disable_event_rule.zip
+      Description: This function disables the event rule after last question is displayed.
+      FunctionName: disable_event_rule
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+
+  GameOverStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    DependsOn:
+      - DisplayScoreboardFunction
+      - UpdateTeamAndUserScoreFunction
+      - UpdateGameInsightsFunction
+      - DisconnectParticipantsFunction
+    Properties:
+      StateMachineName: GameOver
+      DefinitionS3Location:
+        Bucket: sdp-b00934679
+        Key: game_over/GameOver.json
+      RoleArn: !Ref ExistingLabRole
+
+  DisplayScoreboardFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: display_score_board.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: game_over/display_score_board.zip
+      Description: This function displays scoreboard to users one last time.
+      FunctionName: display_score_board
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+          ENDPOINT_URL:
+            !Sub https://${InGameExperienceWebSocketAPI}.execute-api.${AWS::Region}.amazonaws.com/${InGameExperienceWebSocketAPIStageName}
+
+  UpdateTeamAndUserScoreFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: update_team_and_user_score.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: game_over/update_team_and_user_score.zip
+      Description: This function is to be updated - updated team's score only. User score is pending!!!
+      FunctionName: update_team_and_user_score
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+
+  UpdateGameInsightsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Architectures:
+        - arm64
+      Role: !Ref ExistingLabRole
+      Handler: update_game_insights.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: game_over/update_game_insights.zip
+      Layers:
+        - !Ref RequestsLayer
+      Description: This function is to upload the latest game insights (to generate visualization using Looker Studio) to cloud storage by invoking the cloud function.
+      FunctionName: update_game_insights
+      Timeout: 60
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+          GAME_INSIGHTS_URL:
+            !Ref UpdateGameInsightsCloudFunctionURL
+
+  DisconnectParticipantsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: disconnect_participants.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: game_over/disconnect_participants.zip
+      Description: This disconnects participants after displaying the score and winner details.
+      FunctionName: disconnect_participants
+      Environment:
+        Variables:
+          REGION:
+            !Ref "AWS::Region"
+          ENDPOINT_URL:
+            !Sub https://${InGameExperienceWebSocketAPI}.execute-api.${AWS::Region}.amazonaws.com/${InGameExperienceWebSocketAPIStageName}
+
+  RequestsLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      CompatibleArchitectures:
+        - arm64
+        - x86_64
+      CompatibleRuntimes:
+        - python3.10
+      Content:
+        S3Bucket: sdp-b00934679
+        S3Key: layer/requests_layer.zip
+      LayerName: requests_layer
+
+  #------------------------------------------------ API Gateway -----------------------------------------------
+
+  # configuration for the /getTeamScore endpoint to invoke get_team_score lambda function using API gateway
+
+  GetTeamScoreFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: get_team_score.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: lex/get_team_score.zip
+      Description: Get team score for lex bot.
+      FunctionName: get_team_score
+
+  GetTeamScoreMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      ApiKeyRequired: false
+      AuthorizationType: NONE
+      HttpMethod: POST
+      Integration:
+        IntegrationHttpMethod: POST
+        Type: AWS_PROXY
+        Uri: !Sub
+          - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations
+          - lambdaArn: !GetAtt GetTeamScoreFunction.Arn
+      ResourceId: !Ref GetTeamScoreResource
+      RestApiId: !Ref TriviaGameAPI
+
+  TriviaGameAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: TriviaGameAPI
+
+  GetTeamScoreResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: getTeamScore
+
+  TriviaGameAPIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - TriviaGameAPI4xx
+      - TriviaGameAPI5xx
+      - ViewTeamsApiMethod
+      - ViewTeamsMethodOPTIONS
+      - InvitationNotificationApiMethod
+      - InvitationNotificationMethodOPTIONS
+      - SendInvitationsApiMethod
+      - SendInvitationsMethodOPTIONS
+      - AcceptInvitationsApiMethod
+      - AcceptInvitationsMethodOPTIONS
+      - ShowInvitationsApiMethod
+      - ShowInvitationsMethodOPTIONS
+      - RemovePlayerApiMethod
+      - RemovePlayerMethodOPTIONS
+      - LeaveTeamApiMethod
+      - LeaveTeamMethodOPTIONS
+      - RejectInvitationsApiMethod
+      - RejectInvitationsMethodOPTIONS
+      - MakeAdminApiMethod
+      - MakeAdminMethodOPTIONS
+      - CreateTeamMethod
+      - CreateTeamMethodOPTIONS
+      - TeamDetailsMethod
+      - TeamDetailsMethodOPTIONS
+      - GetTeamScoreMethod
+      - EditGameMethod
+      - EditGameMethodOPTIONS
+      - CreateGameMethod
+      - CreateGameMethodOPTIONS
+      - DeleteGameMethod
+      - DeleteGameMethodOPTIONS
+      - GetQnAMethod
+      - GetQnAMethodOPTIONS
+      - UserPicsMethod
+      - UserPicsMethodOPTIONS
+      - GetUserpicMethod
+      - GetUserpicMethodOPTIONS
+      - CheckAnswerMethod
+      - CheckAnswerMethodOPTIONS
+      - MakeUserMethod
+      - MakeUserMethodOPTIONS
+      - GetUserinfoMethod
+      - GetUserinfoMethodOPTIONS
+      - EditUserinfoMethod
+      - EditUserinfoMethodOPTIONS
+      - AsAdminMethod
+      - AsAdminMethodOPTIONS
+      - GetUserbyEmailMethod
+      - GetUserbyEmailMethodOPTIONS
+
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+
+  TriviaGameAPI4xx:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResponseType: DEFAULT_4XX
+      StatusCode: '404'
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+
+  TriviaGameAPI5xx:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResponseType: DEFAULT_5XX
+      StatusCode: '500'
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+        gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+
+  GetTeamScoreAPIProdStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      DeploymentId: !Ref TriviaGameAPIDeployment
+      StageName: prod
+
+  GetTeamScoreLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref GetTeamScoreFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/getTeamScore
+
+  #------------------------------------------------ API Gateway ends-----------------------------------------------
+  
+  
+  CreateGameFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: create_game.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: admin_module/create_game.zip
+      Description: This lambda creates the game
+      FunctionName: create_game
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref CreateGameTable
+          REGION:
+            !Ref "AWS::Region"
+
+  EditGameFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: edit_game.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: admin_module/edit_game.zip
+      Description: This lambda edits the information of the game
+      FunctionName: edit_game
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref CreateGameTable
+          REGION:
+            !Ref "AWS::Region"
+
+  DeleteGameFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: delete_game.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: admin_module/delete_game.zip
+      Description: This lambda delete the game
+      FunctionName: delete_game
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref CreateGameTable
+          REGION:
+            !Ref "AWS::Region"
+
+  ShowGamesFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !Ref ExistingLabRole
+      Handler: show_games.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: admin_module/show_games.zip
+      Description: This lambda show games.
+      FunctionName: show_games
+      Environment:
+        Variables:
+          DYNAMODB_TABLE_NAME: !Ref CreateGameTable
+          REGION:
+            !Ref "AWS::Region"
+
+  #API Gateway resource for CreateGame functionality
+  CreateGameResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt
+        - TriviaGameAPI
+        - RootResourceId
+      PathPart: "CreateGame"
+      RestApiId: !Ref TriviaGameAPI
+
+  #API Service Gateway Method for CreateGame functionality
+  CreateGameMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref CreateGameResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CreateGameFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+
+  # API Service Gateway Method for CreateGame method OPTIONS
+  CreateGameMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref CreateGameResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CreateGameFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+
+
+  #API Gateway resource for EditGame functionality
+  EditGameResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt
+        - TriviaGameAPI
+        - RootResourceId
+      PathPart: "EditGame"
+      RestApiId: !Ref TriviaGameAPI
+
+  #API Service Gateway Method for EditGame functionality
+  EditGameMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref EditGameResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${EditGameFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+
+  # API Service Gateway Method for EditGame method OPTIONS
+  EditGameMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref EditGameResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${EditGameFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+
+  #API Gateway resource for DeleteGame functionaity
+  DeleteGameResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt
+        - TriviaGameAPI
+        - RootResourceId
+      PathPart: "DeleteGame"
+      RestApiId: !Ref TriviaGameAPI
+
+  #API Gateway resource for DeleteGame functionaity
+  ShowGamesResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      ParentId: !GetAtt
+        - TriviaGameAPI
+        - RootResourceId
+      PathPart: showGames
+      RestApiId: !Ref TriviaGameAPI
+
+  #API Service Gateway Method for DeleteGame functionality
+  ShowGamesMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref ShowGamesResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 404
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ShowGamesFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+
+  #API Service Gateway Method for DeleteGame functionality
+  DeleteGameMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref DeleteGameResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 404
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteGameFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+
+  # API Service Gateway Method for DeleteGame method OPTIONS
+  ShowGamesMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref ShowGamesResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ShowGamesFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+
+  # API Service Gateway Method for DeleteGame method OPTIONS
+  DeleteGameMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref DeleteGameResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DeleteGameFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+
+  # Provide gateway lambda permission for CreateGame lambda function
+  CreateGameGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt CreateGameFunction.Arn
+      Principal: apigateway.amazonaws.com
+#      DependsOn:
+#        - gatewaydeployment
+
+  # Provide gateway lambda permission for EditGame lambda function
+  EditGameGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt EditGameFunction.Arn
+      Principal: apigateway.amazonaws.com
+#      DependsOn:
+#        - gatewaydeployment
+
+  # Provide gateway lambda permission for DeleteGame lambda function
+  DeleteGameGatewaypermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt DeleteGameFunction.Arn
+      Principal: apigateway.amazonaws.com
+#      DependsOn:
+#        - gatewaydeployment
+
+  # Provide gateway lambda permission for DeleteGame lambda function
+  ShowGamesGatewaypermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt ShowGamesFunction.Arn
+      Principal: apigateway.amazonaws.com
+#      DependsOn:
+#        - gatewaydeployment
+
+  ViewTeamsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: viewTeams
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: team/viewTeams.zip
+
+      Handler: viewTeams.handler
+      Runtime: nodejs14.x
+      Role: !Ref ExistingLabRole
+
+ # permission for API Gateway to invoke the lambda function
+  ViewTeamsFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ViewTeamsFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/viewTeams
+
+  ViewTeamsApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: viewTeams
+
+  ViewTeamsApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref ViewTeamsApiResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ViewTeamsFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  ViewTeamsMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref ViewTeamsApiResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ViewTeamsFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  #Diwen Module Table 1
+  UserTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: UserProf
+      AttributeDefinitions:
+        - AttributeName: UserID
+          AttributeType: S
+      KeySchema:
+        - AttributeName: UserID
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+#  #Diwen Lambda functions Total 4
+  GetQnAFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: getQnA
+      Handler: lambda_function.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: auth/getQnA.zip
+      Role: !Ref ExistingLabRole
+      Runtime: python3.8
+
+  # permission for API Gateway to invoke the lambda function
+  GetQnAFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref GetQnAFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/getQnA
+
+  GetQnAResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: getQnA
+
+  GetQnAMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref GetQnAResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetQnAFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  GetQnAMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref GetQnAResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${GetQnAFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  UserPicsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: userPics
+      Handler: userPics.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: auth/userPics.zip
+      Role: !Ref ExistingLabRole
+      Runtime: python3.8
+
+  # permission for API Gateway to invoke the lambda function
+  UserPicsFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref UserPicsFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/userPics
+
+  UserPicsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: userPics
+
+  UserPicsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref UserPicsResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UserPicsFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  UserPicsMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref UserPicsResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UserPicsFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  # getUserpic endpoint starts
+  GetUserpicFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref UserPicsFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/getUserpic
+
+  GetUserpicResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: getUserpic
+
+  GetUserpicMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref GetUserpicResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UserPicsFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  GetUserpicMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref GetUserpicResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UserPicsFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  # getUserpic endpoint ends
+
+  CheckAnswerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: checkAnswer
+      Handler: checkAnswer.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: auth/checkAnswer.zip
+      Role: !Ref ExistingLabRole
+      Runtime: python3.8
+
+  # permission for API Gateway to invoke the lambda function
+  CheckAnswerFunctionPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CheckAnswerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/checkAnswer
+
+  CheckAnswerResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: checkAnswer
+
+  CheckAnswerMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref CheckAnswerResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CheckAnswerFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  CheckAnswerMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref CheckAnswerResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CheckAnswerFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  MakeUserFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: makeUser
+      Handler: makeUser.lambda_handler
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: auth/makeUser.zip
+      Role: !Ref ExistingLabRole
+      Runtime: python3.8
+
+  MakeUserResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: makeUser
+
+  MakeUserMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref MakeUserResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MakeUserFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  MakeUserMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref MakeUserResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MakeUserFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  # permission for API Gateway to invoke the lambda function
+  GetUserinfoPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref MakeUserFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/getUserinfo
+
+  GetUserinfoResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: getUserinfo
+
+  GetUserinfoMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref GetUserinfoResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MakeUserFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  GetUserinfoMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref GetUserinfoResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MakeUserFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  # permission for API Gateway to invoke the lambda function
+  EditUserinfoPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref MakeUserFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/editUserinfo
+
+  EditUserinfoResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: editUserinfo
+
+  EditUserinfoMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref EditUserinfoResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MakeUserFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  EditUserinfoMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref EditUserinfoResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MakeUserFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  # permission for API Gateway to invoke the lambda function
+  AsAdminPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref MakeUserFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/asAdmin
+
+  AsAdminResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: asAdmin
+
+  AsAdminMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref AsAdminResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MakeUserFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  AsAdminMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref AsAdminResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MakeUserFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  # permission for API Gateway to invoke the lambda function
+  GetUserbyEmailPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref MakeUserFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/getUserbyEmail
+
+  GetUserbyEmailResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: getUserbyEmail
+
+  GetUserbyEmailMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref GetUserbyEmailResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MakeUserFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  GetUserbyEmailMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref GetUserbyEmailResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MakeUserFunction.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  #Lambda Functions
+  #Need to connect to SQS queue
+  InvitationNotification:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: inviteNotification
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: team/inviteNotification.zip
+
+      Handler: inviteNotification.handler
+      Runtime: nodejs14.x
+      Role: !Ref ExistingLabRole
+
+  #API for sending Invitation notification
+  InvitationNotificationPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref InvitationNotification
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/inviteNotification
+
+  InvitationNotificationApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: inviteNotification
+
+  InvitationNotificationApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref InvitationNotificationApiResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${InvitationNotification.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+
+  InvitationNotificationMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref InvitationNotificationApiResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${InvitationNotification.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+
+
+  SendInvitations:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: sendInvitations
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: team/sendInvitations.zip
+
+      Handler: sendInvitations.handler
+      Runtime: nodejs14.x
+      Role: !Ref ExistingLabRole
+
+  #API for sending Invitation
+  SendInvitationsPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SendInvitations
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/sendInvitations
+
+  SendInvitationsApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: sendInvitations
+
+  SendInvitationsApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref SendInvitationsApiResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SendInvitations.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+
+  SendInvitationsMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref SendInvitationsApiResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SendInvitations.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+
+
+
+
+  AcceptInvitations:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: acceptInvitations
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: team/acceptInvitations.zip
+
+      Handler: acceptInvitations.handler
+      Runtime: nodejs14.x
+      Role: !Ref ExistingLabRole
+
+  #API to accept Invitation
+  AcceptInvitationsPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AcceptInvitations
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/acceptInvitations
+
+  AcceptInvitationsApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: acceptInvitations
+
+  AcceptInvitationsApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref AcceptInvitationsApiResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AcceptInvitations.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+
+  AcceptInvitationsMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref AcceptInvitationsApiResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${AcceptInvitations.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+
+
+
+
+
+  ShowInvitations:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: showInvitations
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: team/showInvitations.zip
+
+      Handler: showInvitations.handler
+      Runtime: nodejs14.x
+      Role: !Ref ExistingLabRole
+
+  #API for sending Invitation
+  ShowInvitationsPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ShowInvitations
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/showInvitations
+
+  ShowInvitationsApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: showInvitations
+
+  ShowInvitationsApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref ShowInvitationsApiResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ShowInvitations.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+
+  ShowInvitationsMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref ShowInvitationsApiResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ShowInvitations.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+
+
+
+
+  RemovePlayer:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: removePlayer
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: team/removePlayer.zip
+
+      Handler: removePlayer.handler
+      Runtime: nodejs14.x
+      Role: !Ref ExistingLabRole
+
+  #API for sending Invitation
+  RemovePlayerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RemovePlayer
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/removePlayer
+
+  RemovePlayerApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: removePlayer
+
+  RemovePlayerApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref RemovePlayerApiResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RemovePlayer.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+
+  RemovePlayerMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref RemovePlayerApiResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RemovePlayer.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+
+
+
+  LeaveTeam:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: leaveTeam
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: team/leaveTeam.zip
+
+      Handler: leaveTeam.handler
+      Runtime: nodejs14.x
+      Role: !Ref ExistingLabRole
+
+  #API for sending Invitation
+  LeaveTeamPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LeaveTeam
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/leaveTeam
+
+  LeaveTeamApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: leaveTeam
+
+  LeaveTeamApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref LeaveTeamApiResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LeaveTeam.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+
+  LeaveTeamMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref LeaveTeamApiResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LeaveTeam.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+
+
+
+  RejectInvitations:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: rejectInvitations
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: team/rejectInvitations.zip
+
+      Handler: rejectInvitations.handler
+      Runtime: nodejs14.x
+      Role: !Ref ExistingLabRole
+
+  #API for sending Invitation
+  RejectInvitationsPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RejectInvitations
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/rejectInvitations
+
+  RejectInvitationsApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: rejectInvitations
+
+  RejectInvitationsApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref RejectInvitationsApiResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RejectInvitations.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  RejectInvitationsMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref RejectInvitationsApiResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RejectInvitations.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+
+
+
+  MakeAdmin:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: makeAdmin
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: team/makeAdmin.zip
+
+      Handler: makeAdmin.handler
+      Runtime: nodejs14.x
+      Role: !Ref ExistingLabRole
+
+  #API for sending Invitation
+  MakeAdminPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref MakeAdmin
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/makeAdmin
+
+  MakeAdminApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: makeAdmin
+
+  MakeAdminApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref MakeAdminApiResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MakeAdmin.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  MakeAdminMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref MakeAdminApiResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MakeAdmin.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  CreateTeam:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: createTeam
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: team/createTeam.zip
+
+      Handler: createTeam.handler
+      Runtime: nodejs14.x
+      Role: !Ref ExistingLabRole
+
+  #API for sending Invitation
+  CreateTeamPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CreateTeam
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/createTeam
+
+  CreateTeamApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: createTeam
+
+  CreateTeamMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref CreateTeamApiResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CreateTeam.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  CreateTeamMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref CreateTeamApiResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CreateTeam.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+
+  TeamDetails:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: teamDetails
+      Code:
+        S3Bucket: sdp-b00934679
+        S3Key: team/teamDetails.zip
+
+      Handler: teamDetails.handler
+      Runtime: nodejs14.x
+      Role: !Ref ExistingLabRole
+
+  #API for sending Invitation
+  TeamDetailsPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref TeamDetails
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${TriviaGameAPI}/*/*/teamDetails
+
+  TeamDetailsApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ParentId: !GetAtt TriviaGameAPI.RootResourceId
+      PathPart: teamDetails
+
+  TeamDetailsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref TeamDetailsApiResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TeamDetails.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+
+  TeamDetailsMethodOPTIONS:
+    Type: "AWS::ApiGateway::Method"
+    Properties:
+      RestApiId: !Ref TriviaGameAPI
+      ResourceId: !Ref TeamDetailsApiResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: "AWS"
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'POST, OPTIONS'"
+          - StatusCode: 400
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+          - StatusCode: 500
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${TeamDetails.Arn}/invocations"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 500
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+        - StatusCode: 404
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+            method.response.header.Access-Control-Allow-Headers: true

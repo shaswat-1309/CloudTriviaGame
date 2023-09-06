@@ -1,0 +1,92 @@
+.App {
+  text-align: center;
+}
+
+.App-logo {
+  height: 40vmin;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .App-logo {
+    animation: App-logo-spin infinite 20s linear;
+  }
+}
+
+.App-header {
+  background-color: #282c34;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(10px + 2vmin);
+  color: white;
+}
+
+.App-link {
+  color: #61dafb;
+}
+
+@keyframes App-logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Styling for the QuestionPage component */
+.question-page {
+  max-width: 500px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.question-page h1 {
+  font-size: 24px;
+  font-weight: bold;
+}
+
+.question-page h2 {
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.question-page p {
+  margin: 10px 0;
+}
+
+.question-page .options {
+  margin-top: 10px;
+}
+
+.question-page .option {
+  margin-bottom: 5px;
+}
+
+.question-page .hint {
+  margin-top: 10px;
+}
+
+.question-page .actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 20px;
+}
+
+.question-page button {
+  padding: 10px 20px;
+  font-size: 16px;
+  background-color: #007bff;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.question-page button i {
+  margin-right: 5px;
+}

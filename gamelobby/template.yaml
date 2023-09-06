@@ -1,0 +1,128 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  gamelobby
+
+  Sample SAM Template for gamelobby
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 3
+    MemorySize: 128
+    Tracing: Active
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,OPTIONS,PUT'"
+      AllowHeaders: "'content-type'"
+      AllowOrigin: "'*'"
+    TracingEnabled: true
+
+Resources:
+
+  # Lambda function to handle the game lobby logic
+  LobbyFunction:
+    Type: AWS::Serverless::Function 
+    Properties:
+      CodeUri: lobby/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Role: arn:aws:iam::182296130665:role/LabRole
+      Architectures:
+      - x86_64
+      Events:
+        Lobby:
+          Type: Api 
+          Properties:
+            Path: /gamelobby
+            Method: post
+
+  # Lambda function to handle joining a game
+  JoinGameFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: joingame/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Role: arn:aws:iam::182296130665:role/LabRole
+      Architectures:
+      - x86_64
+      Events:
+        JoinGame:
+          Type: Api 
+          Properties:
+            Path: /joingame
+            Method: put
+
+  # Lambda function to retrieve category leaderboards
+  CategoryScoreFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: category_leaderboard/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Role: arn:aws:iam::182296130665:role/LabRole
+      Architectures:
+      - x86_64
+      Events:
+        categoryscore:
+          Type: Api
+          Properties:
+            Path: /category_leaderboard
+            Method: get
+            RequestParameters:
+              - method.request.querystring.time_frame:
+                  Required: true
+                  Caching: false
+              - method.request.querystring.category:
+                  Required: true
+                  Caching: false
+        # Scheduled event to check achievements
+        AchievementCheck:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 day)
+
+  # Lambda function to retrieve individual leaderboards
+  IndividualLeaderboardFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: individuals_leaderboard/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Role: arn:aws:iam::182296130665:role/LabRole
+      Architectures:
+      - x86_64
+      Events:
+        playerleaderboard:
+          Type: Api
+          Properties:
+            Path: /players_leaderboard
+            Method: get
+            RequestParameters:
+              - method.request.querystring.time_frame:
+                  Required: true
+                  Caching: false
+              - method.request.querystring.category:
+                  Required: true
+                  Caching: false
+
+  # Lambda function to export table data to google cloud storage
+  ExportTableFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: export_table/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Role: arn:aws:iam::182296130665:role/LabRole
+      Architectures:
+      - x86_64
+      Environment:
+        Variables:
+          GCP_KEY: './serverlessproject-386517-4ebd333613c7.json'
+      # Scheduled event to export table data to GCP
+      Events:
+        ExportScheduleEvent:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 day)

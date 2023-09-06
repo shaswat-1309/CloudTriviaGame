@@ -1,0 +1,85 @@
+{
+  "Comment": "Fetch questions and answers in the in-game experience",
+  "StartAt": "Is first question?",
+  "States": {
+    "Is first question?": {
+      "Comment": "If first do something else do something else",
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.question_number",
+          "NumericEquals": 1,
+          "Next": "updateGameStatusToInProgress"
+        },
+        {
+          "Variable": "$.question_number",
+          "NumericGreaterThan": 1,
+          "Next": "showAnswer"
+        }
+      ],
+      "Default": "updateGameStatusToInProgress"
+    },
+    "updateGameStatusToInProgress": {
+      "Type": "Task",
+      "Parameters": {
+        "input.$": "$",
+        "game_status": "In progress"
+      },
+      "Resource": "arn:aws:lambda:us-east-1:182296130665:function:update_game_status",
+      "Next": "Wait"
+    },
+    "Wait": {
+      "Comment": "A Wait state delays the state machine from continuing for a specified time.",
+      "Type": "Wait",
+      "Seconds": 15,
+      "Next": "showQuestion"
+    },
+    "showAnswer": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:182296130665:function:show_current_answer",
+      "Next": "isLastQuestion"
+    },
+    "isLastQuestion": {
+      "Comment": "If first do something else do something else",
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.is_last_question",
+          "IsPresent": true,
+          "Next": "disableEventRule"
+        },
+        {
+          "Variable": "$.is_last_question",
+          "IsPresent": true,
+          "Next": "Wait"
+        }
+      ],
+      "Default": "Wait"
+    },
+    "showQuestion": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:182296130665:function:show_next_question",
+      "Next": "updateEventRuleTargetInputEvent"
+    },
+    "updateEventRuleTargetInputEvent": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:182296130665:function:update_event_rule_target_input",
+      "End": true
+    },
+    "disableEventRule": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:182296130665:function:disable_event_rule",
+      "Next": "callGameOverStateMachine"
+    },
+    "callGameOverStateMachine": {
+      "Comment": "Calling GameOver step function to handle post game completion related workflows",
+      "Type": "Task",
+      "Resource": "arn:aws:states:::states:startExecution",
+      "Parameters": {
+        "StateMachineArn": "arn:aws:states:us-east-1:182296130665:stateMachine:GameOver",
+        "Input.$": "$"
+      },
+      "End": true
+    }
+  }
+}

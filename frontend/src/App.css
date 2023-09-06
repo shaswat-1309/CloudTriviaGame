@@ -1,0 +1,244 @@
+.containerStyles {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    min-width: 100vw;
+    background: linear-gradient(to bottom, lightblue, white);
+    overflow: hidden;
+}
+
+.navbarStyles {
+    background-color: teal;
+    min-width: 100vw;
+    height: 80px;
+    text-align: center;
+    position: fixed;
+    top: 0;
+    overflow: hidden;
+}
+
+.logoStyles {
+    margin-top: 2px;
+    color: white;
+    font-size: 30px;
+    font-weight: bold;
+    font-family: Bungee;
+}
+
+.logoStyles1 {
+    margin-top: 2px;
+    color: teal;
+    font-size: 28px;
+    font-weight: bold;
+    font-family: Bungee;
+}
+
+.buttonContainerStyles {
+    display: flex;
+    justify-content: center;
+    margin-top: 50px;
+}
+
+.buttonStyles {
+    background-color: teal;
+    color: white;
+    font-family: Bungee;
+    font-size: 1.5rem;
+    padding: 8px 46px;
+    margin: 0 30px;
+    border-radius: 34px;
+}
+.buttonStyles:hover {
+    background-color: steelblue;
+}
+
+.containerStyles form {
+    max-width: 330px; /* Increased width to 600px */
+    margin-top: 100px;
+    padding: 40px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background-color: #fff;
+}
+
+.containerStyles form input {
+    width: 50vh;
+    margin-bottom: 10px;
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box;
+    font-size: 20px;
+    margin-top: 10px;
+}
+
+.containerStyles form button {
+    width: 50vh;
+    background-color: teal;
+    color: white;
+    padding: 14px 10px;
+    margin: 8px 0;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 20px;
+}
+
+.containerStyles form label {
+    font-size: 15px;
+    font-weight: bold;
+}
+
+.containerStyles form button:hover {
+    background-color: #45a049;
+}
+
+.containerStyles form .error {
+    color: red;
+}
+
+.containerStyles form .success {
+    color: green;
+}
+
+.gamesListStyles {
+    max-width: 600px;
+    margin: 0 auto;
+    margin-top: 150px;
+    padding: 20px;
+}
+
+.gameItemStyles {
+    margin-bottom: 20px;
+    padding: 20px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background-color: #fff;
+    font-size: 20px;
+}
+
+.gameHeaderStyles {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+}
+
+.gameNameStyles {
+    font-size: 24px;
+    font-weight: bold;
+}
+
+.chevronIconStyles {
+    font-size: 20px;
+    cursor: pointer;
+}
+
+.gameDetailStyles {
+    font-size: 20px;
+    margin-bottom: 5px;
+    margin-top: 10px;
+}
+
+.gameButtonsStyles {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 10px;
+}
+
+.buttonStyles1 {
+    background-color: teal;
+    color: white;
+    font-family: Bungee;
+    font-size: 0.9rem;
+    padding: 10px 10px;
+    margin: 0 10px;
+    border-radius: 20px;
+}
+
+.questionsListStyles {
+    max-width: 600px;
+    margin: 0 auto;
+    margin-top: 100px;
+    padding: 20px;
+}
+
+.questionItemStyles {
+    margin-bottom: 20px;
+    padding: 30px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background-color: #fff;
+    font-size: 30px;
+}
+
+.questionHeaderStyles {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+}
+
+.questionTextStyles {
+    font-size: 24px;
+    font-weight: bold;
+}
+
+.questionDetailStyles {
+    font-size: 20px;
+    margin-bottom: 5px;
+    margin-top: 10px;
+}
+
+.questionButtonsStyles {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 10px;
+}
+.formControlStyles {
+    margin-bottom: 20px;
+}
+
+.backButtonStyles {
+    position: absolute;
+    top: 15px;
+    left: 10px;
+    font-size: 14px;
+    font-family: Bungee, sans-serif;
+    color: #000;
+    text-decoration: none;
+    cursor: pointer;
+    padding: 5px 10px;
+    border: 1px solid #000;
+    background-color: #fff;
+    border-radius: 4px;
+    transition: background-color 0.3s ease, color 0.3s ease;
+}
+/* Optional hover styles */
+.backButtonStyles:hover {
+     background-color: #000;
+     color: #fff;
+ }
+
+.ButtonStyles2 {
+    background-color: teal;
+    color: white;
+    font-family: Bungee, sans-serif;
+    font-size: 0.9rem;
+    padding: 10px 20px;
+    margin: 0 100px;
+    border-radius: 20px;
+    text-decoration: none;
+    display: inline-block;
+    cursor: pointer;
+}
+
+.ButtonStyles2:hover {
+    background-color: #128c7e;
+}
+
+.ButtonStyles2:active {
+    background-color: #0c6356;
+}

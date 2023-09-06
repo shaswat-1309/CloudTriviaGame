@@ -1,0 +1,30 @@
+{
+  "Comment": "Workflow for setting up game",
+  "StartAt": "update_game_status",
+  "States": {
+    "update_game_status": {
+      "Type": "Task",
+      "Parameters": {
+        "input.$": "$",
+        "game_status": "Waiting"
+      },
+      "Resource": "arn:aws:lambda:us-east-1:182296130665:function:update_game_status",
+      "Next": "updateEventRule"
+    },
+    "updateEventRule": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:182296130665:function:update_event_rule",
+      "Next": "getGameQuestions"
+    },
+    "getGameQuestions": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:182296130665:function:get_game_questions",
+      "Next": "saveGameQuestions"
+    },
+    "saveGameQuestions": {
+      "Type": "Task",
+      "Resource": "arn:aws:lambda:us-east-1:182296130665:function:save_game_questions",
+      "End": true
+    }
+  }
+}
